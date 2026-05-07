@@ -2,3 +2,9 @@ services:
   frontend:
     ports:
       - "8080:80"
+  backend:
+    volumes:
+      - quiz-db-data-dev:/app/database  # 测试独立 volume，与生产环境数据隔离
+
+volumes:
+  quiz-db-data-dev:

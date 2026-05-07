@@ -48,9 +48,11 @@ docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d   # 测试
 
 | 文件 | 内容 |
 |---|---|
-| `docker-compose.yml` | 服务定义、网络、Volume（环境无关） |
-| `docker-compose.prod.yml` | 只写差异：`ports: 80:80` |
-| `docker-compose.dev.yml` | 只写差异：`ports: 8080:80` |
+| `docker-compose.yml` | 服务定义、网络（环境无关） |
+| `docker-compose.prod.yml` | 差异：`ports: 80:80` + backend volume: `quiz-db-data-prod` |
+| `docker-compose.dev.yml` | 差异：`ports: 8080:80` + backend volume: `quiz-db-data-dev` |
+
+**环境数据隔离**：volume 名称在覆盖文件中各自声明，生产和测试数据库完全独立。若放在基础文件共用同一个 volume，测试环境的数据操作会直接污染生产数据库。
 
 ### compose 文件放在哪里
 **错误做法**：放在前端业务仓库 → 业务仓库承担了部署职责，耦合
@@ -183,6 +185,133 @@ infra 仓库监听事件，拿到 image_tag 和 environment，执行对应的 co
 
 ---
 
+## 阶段四：CD 触发机制重构（Promotion-based Deployment）
+
+### 问题：push tag 自动触发 CD 的隐患
+
+阶段三的生产部署由 `push tags: v*.*.*` 触发，存在根本性设计缺陷：
+
+```
+❌ push tag 自动触发 CD 的问题：
+  - tag 一旦 push 到远程，无法撤回
+  - CI/Actions 立即执行，没有人工卡点
+  - "版本归档"（打 tag）和"部署决策"（执行 CD）被耦合到同一个 Git 操作
+  - 误操作 push tag → 生产事故，且无法中止
+```
+
+### 认知纠正：tag 是什么？
+
+tag **不是对分支的说明**，而是**对某一个具体 commit 的永久标记**：
+
+```
+commit A → commit B → commit C  ← main（会移动）
+                           ↑
+                        v1.0.0   ← tag（永远不动，版本归档）
+```
+
+- **分支指针**：随新 commit 自动前移，表示"当前最新状态"
+- **tag 指针**：永远指向打 tag 时的那个 commit，表示"这个快照是 v1.0.0"
+
+tag 的语义是**版本归档**，不是部署指令。让 push tag 自动触发生产部署，等于把"盖章"和"执行"强制绑定，违背职责分离原则。
+
+### 解决方案：Promotion-based Deployment（晋级式部署）
+
+**核心思想**：CI 和 CD 是两个独立的关注点，触发机制完全分离。
+
+```
+push 分支     → 触发 CI（只读操作：lint + build）
+workflow_dispatch → 触发 CD（写操作：改变服务器状态）
+git push tag  → 什么都不触发（零副作用，只是 Git 历史归档）
+```
+
+| 事件 | 触发 job | 有无副作用 | 说明 |
+|------|---------|---------|------|
+| `push 分支` | CI | 无 | 只读，检查代码质量 |
+| `workflow_dispatch(deploy-dev)` | CD-测试 | 有 | 构建镜像、改变测试服务器状态 |
+| `workflow_dispatch(deploy-prod)` | CD-生产 | 有 | 改变生产服务器状态 |
+| `git push tag` | 无 | 无 | 版本归档，零副作用 |
+
+### 新的 workflow_dispatch 输入参数设计
+
+```yaml
+on:
+  push:
+    branches: ['**']        # 只监听分支 push，触发 CI
+  workflow_dispatch:
+    inputs:
+      event:
+        description: '选择操作类型'
+        type: choice
+        options: [deploy-dev, deploy-prod]
+      tag:
+        description: '生产部署时填写，对应测试验证过的 tag，如 v1.0.0'
+        required: false
+```
+
+### 新的完整操作流程
+
+```
+1. push 代码 → CI 自动运行（lint + build），代码质量卡点
+
+2. 准备给 QA 测试
+   → GitHub Actions → Run workflow → event=deploy-dev
+   → 构建镜像 sha-abc123，部署测试环境
+
+3. QA 测试通过，准备发布
+   → git tag -a v1.0.0 -m 'release: xxx'
+   → git push origin v1.0.0
+   → （什么都不触发，只是版本归档）
+
+4. 上线决策（人工触发）
+   → GitHub Actions → Run workflow
+   → event=deploy-prod，tag=v1.0.0
+   → 给 sha-abc123 追加 v1.0.0 tag（imagetools create）
+   → 部署生产
+```
+
+### deploy-prod 如何找到 tag 对应的 sha？
+
+```yaml
+- name: Checkout 代码（用于获取 tag 对应的 sha）
+  uses: actions/checkout@v4
+  with:
+    ref: ${{ inputs.tag }}   # 检出指定 tag，github.sha 就是该 tag 对应的 commit hash
+```
+
+checkout 指定 tag 后，`${{ github.sha }}` 就是该 tag 打在的那个 commit 的 hash，与测试阶段推送的 sha 镜像完全对应，一次构建原则得以保证。
+
+### 防御性校验：tag 参数不能为空
+
+```yaml
+- name: 校验 tag 参数不能为空
+  run: |
+    if [ -z "${{ inputs.tag }}" ]; then
+      echo "❌ 生产部署必须填写 tag 参数，如 v1.0.0"
+      exit 1
+    fi
+```
+
+`workflow_dispatch` 的 `choice` 类型字段不能与 `required` 混用，必须手动校验，让错误提前暴露，而非在 `imagetools create` 报出难以理解的错误。
+
+### 与大厂实践的对应
+
+大厂完整的上线审批链路（参考）：
+
+```
+代码合并 main
+  → CI 自动运行
+  → 开发者发起"上线申请"（填写变更范围、风险评估）
+  → 技术负责人审批
+  → 审批通过，系统自动或人工触发 CD
+  → 灰度发布（1% → 10% → 100% 流量）
+  → 监控观察，无异常后全量
+```
+
+当前项目实现了其中的核心机制：**CI 与 CD 完全解耦，CD 必须人工触发**。
+`environment: production` + `required reviewers`（GitHub 原生审批功能）可在此基础上直接叠加，无需改造触发机制。
+
+---
+
 ## 关键概念速查
 
 | 概念 | 说明 |
@@ -199,6 +328,120 @@ infra 仓库监听事件，拿到 image_tag 和 environment，执行对应的 co
 | 语义版本 tag（v1.0.0） | 人工打 tag 时追加，用于生产环境，表示"经过测试确认可发布的版本" |
 | 禁用 latest tag | latest 语义模糊，多环境下无法分辨指向哪个版本，大厂规范禁用 |
 | ci job 限定 `push` 事件 | `if: github.event_name == 'push'`，避免 workflow_dispatch 触发时跑两遍 CI |
+| Promotion-based Deployment | 晋级式部署：代码经过测试环境验证后，人工决策"晋级"到生产环境，CI 与 CD 触发机制完全分离 |
+| push tag 零副作用 | tag 是版本归档，不是部署指令；push tag 不触发任何 Actions，部署必须单独人工触发 |
+| `workflow_dispatch inputs` | GitHub Actions 手动触发时的参数输入，支持 `choice`（下拉选择）和 `string`（文本输入）类型 |
+| `actions/checkout ref` | `ref: ${{ inputs.tag }}` 检出指定 tag，使 `github.sha` 对应该 tag 的 commit，用于 imagetools create 找到正确的 sha 镜像 |
+| 有无副作用的区分 | CI 是只读操作（读代码、跑校验），CD 是写操作（改变基础设施状态）；两者触发机制应分离 |
+
+---
+
+## 阶段五：Workflow 重复代码消除
+
+### 问题：CI steps 在多个 job 中重复
+
+改造前，`ci` 和 `deploy-dev` 两个 job 各自包含完全相同的 5 个 steps（checkout、node 安装、依赖安装、lint、build），每个仓库重复一次，两个仓库共重复 4 次。
+
+### 三种解法的对比
+
+#### 方案 X：YAML Anchors（不可用）
+YAML 语法原生支持锚点 `&` 和引用 `*` 复用片段，但 **GitHub Actions 不支持**，会直接报错拒绝解析。
+
+#### 方案 A：ci job 的 if 条件合并两种事件（采用）
+```yaml
+ci:
+  if: github.event_name == 'push' || github.event_name == 'workflow_dispatch'
+
+deploy-dev:
+  needs: ci   # 等 ci 完成再执行，无需内联 CI steps
+  if: ... && inputs.event == 'deploy-dev'
+
+deploy-prod:
+  needs: ci   # 同样约束，防止绕过 CI 直接部署生产
+  if: ... && inputs.event == 'deploy-prod'
+```
+- 单文件，无需新增文件
+- `deploy-dev` / `deploy-prod` 只写独有步骤，重复消除
+- **注意**：`deploy-prod` 必须同样加 `needs: ci`，否则生产部署绕过 CI 校验
+
+#### 方案 B：同仓库 Reusable Workflow
+把 CI steps 抽成独立的 `_ci.yml`，用 `workflow_call` 事件声明为可复用，其他 job 通过 `uses: ./.github/workflows/_ci.yml` 调用。
+- 结构最清晰，但多一个文件，跳转阅读
+- 适合 2-3 个仓库有大量共同逻辑时
+
+#### 方案 C：跨仓库公共 Workflow 仓库（大厂规范）
+把通用 workflow 放到独立的 `org/shared-workflows` 仓库，业务仓库通过 `uses: org/shared-workflows/.github/workflows/node-ci.yml@v2.1.0` 跨仓库调用，传入差异化参数（node 版本、lint 命令等）。
+- **本质是"样板 yml + 项目差异化配置"**
+- 公共 workflow 需要版本管理和向后兼容，本身是一个内部 SDK
+- 适合 5+ 个仓库，ROI 才合理
+
+### 演进路径
+
+```
+1 个项目      → 方案 A（ci if 合并，单文件，够用）
+2-3 个项目    → 方案 B（同仓库 Reusable Workflow）
+5+ 个项目     → 方案 C（公共仓库 shared-workflows）
+大厂（几百个）→ 自研 CI 平台（Jenkins/Tekton），workflow 只是入口
+```
+
+架构决策原则：不是一上来就做最重的方案，而是清楚当前方案的边界在哪，什么时候该演进。
+
+### 当前采用方案 A 的结果
+
+```
+改造前：ci job + deploy-dev job 各有 5 个重复 steps（约 20 行 × 2）
+改造后：ci job 统一处理所有事件的校验，deploy-dev/prod 只写独有逻辑
+减少约 30 行，且无新增文件
+```
+
+---
+
+## 阶段六：端口契约收敛
+
+### 问题：端口号 3000 散落在三处
+
+```
+nginx.conf         → proxy_pass http://backend:3000
+docker-compose.yml → expose: "3000" 和 PORT=3000
+后端 app.ts        → app.listen(process.env.PORT || 3000)
+```
+
+修改端口时需要同步改三处，存在遗漏风险。
+
+### 解决方案：收敛到 compose 环境变量
+
+```yaml
+# docker-compose.yml
+backend:
+  expose:
+    - "${BACKEND_PORT:-3000}"      # 默认值 3000，可通过环境变量覆盖
+  environment:
+    - PORT=${BACKEND_PORT:-3000}   # 注入给容器，后端读 process.env.PORT
+```
+
+后端 `app.ts` 读取 `process.env.PORT`，已与具体数值解耦。
+
+### nginx.conf 的局限性
+
+`nginx.conf` 是静态文件，**无法读取 compose 环境变量**，`proxy_pass http://backend:3000` 中的端口只能硬编码。
+
+解决方式：在 `nginx.conf` 中添加注释，明确声明此处端口必须与 `BACKEND_PORT` 默认值保持一致，修改时两处同步。
+
+```nginx
+# 端口 3000 与 docker-compose.yml 中 BACKEND_PORT 默认值保持一致
+# nginx.conf 是静态文件，无法读取 compose 环境变量，因此此处硬编码
+# 若需修改端口，必须同步修改：nginx.conf（此处）+ compose BACKEND_PORT 默认值
+proxy_pass http://backend:3000;
+```
+
+### 前后端端口耦合的本质
+
+`nginx → backend:3000` 是**边界契约**（interface contract），不可消除。前端容器必须知道后端的地址和端口才能转发请求，这是协作的必要条件。
+
+真正需要管理的是：**契约的定义有单一来源**。当前收敛后：
+- 端口值定义在 `BACKEND_PORT` 环境变量（单一来源）
+- `nginx.conf` 的硬编码是已知的例外，有注释说明
+- 规模更大时可用服务发现（Consul）或配置中心彻底消除
 
 ---
 

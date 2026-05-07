@@ -15,18 +15,11 @@ services:
   backend:
     image: ${DOCKER_HUB_USERNAME}/security-quiz-game-backend:${BACKEND_TAG:-latest}
     expose:
-      - "3000"       # 仅在 Compose 内部网络暴露，不映射到宿主机端口
+      - "${BACKEND_PORT:-3000}"   # 仅在 Compose 内部网络暴露，不映射到宿主机端口
     environment:
-      - PORT=3000
+      - PORT=${BACKEND_PORT:-3000}
       - CORS_ORIGIN=${CORS_ORIGIN}
       - JWT_SECRET=${JWT_SECRET}
-    volumes:
-      - quiz-db-data:/app/database   # 数据库文件持久化，与容器生命周期解绑
+    # volumes 由环境覆盖文件声明（docker-compose.prod.yml / docker-compose.dev.yml）
+    # 生产：quiz-db-data-prod，测试：quiz-db-data-dev，两个环境数据完全隔离
     restart: always
-
-# ==================== 持久化存储 ====================
-# named volume 由 Docker 管理，docker rm 不会删除，数据跨部署保留
-# 查看：docker volume ls
-# 备份：docker run --rm -v quiz-db-data:/data -v $(pwd):/backup alpine tar czf /backup/db-backup.tar.gz /data
-volumes:
-  quiz-db-data:
