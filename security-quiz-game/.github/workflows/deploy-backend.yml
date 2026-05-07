@@ -1,0 +1,67 @@
+name: 部署后端
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-backend
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '镜像 tag（如 v1.0.0 或 sha）'
+        required: true
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'prod'
+        type: choice
+        options:
+          - prod
+          - dev
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 仓库
+        uses: actions/checkout@v4
+
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 上传 Compose 文件到服务器
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "security-quiz-game/docker-compose.yml,security-quiz-game/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/security-quiz-game/"
+          strip_components: 1
+
+      - name: 部署后端到服务器
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: true
+          script: |
+            docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/security-quiz-game-backend:${{ steps.params.outputs.IMAGE_TAG }}
+            DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME }} \
+            BACKEND_TAG=${{ steps.params.outputs.IMAGE_TAG }} \
+            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }} \
+            JWT_SECRET=${{ secrets.JWT_SECRET }} \
+            docker compose \
+              -f ~/deploy/security-quiz-game/docker-compose.yml \
+              -f ~/deploy/security-quiz-game/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml \
+              up -d backend

@@ -1,0 +1,32 @@
+services:
+  # ==================== 前端：Nginx 托管静态文件 + 反向代理 ====================
+  # 唯一对外暴露的入口，所有流量经过 Nginx
+  # 静态文件直接返回，/api/* 转发给 backend 服务
+  # 端口映射由环境覆盖文件决定（docker-compose.prod.yml / docker-compose.dev.yml）
+  frontend:
+    image: ${DOCKER_HUB_USERNAME}/security-quiz-game:${FRONTEND_TAG:-latest}
+    depends_on:
+      - backend
+    restart: always
+
+  # ==================== 后端：Node.js Express 服务 ====================
+  # 不对外直接暴露，只在 Compose 内部网络可访问
+  # 外部无法绕过 Nginx 直接访问后端，安全性更高
+  backend:
+    image: ${DOCKER_HUB_USERNAME}/security-quiz-game-backend:${BACKEND_TAG:-latest}
+    expose:
+      - "3000"       # 仅在 Compose 内部网络暴露，不映射到宿主机端口
+    environment:
+      - PORT=3000
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - JWT_SECRET=${JWT_SECRET}
+    volumes:
+      - quiz-db-data:/app/database   # 数据库文件持久化，与容器生命周期解绑
+    restart: always
+
+# ==================== 持久化存储 ====================
+# named volume 由 Docker 管理，docker rm 不会删除，数据跨部署保留
+# 查看：docker volume ls
+# 备份：docker run --rm -v quiz-db-data:/data -v $(pwd):/backup alpine tar czf /backup/db-backup.tar.gz /data
+volumes:
+  quiz-db-data:
