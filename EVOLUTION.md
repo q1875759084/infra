@@ -445,6 +445,115 @@ proxy_pass http://backend:3000;
 
 ---
 
+## 阶段七：环境变量管理规范
+
+### 环境变量的判断标准（12-Factor App）
+
+满足以下任一条件的值，必须外置为环境变量，不得硬编码：
+1. **不同环境值不同**（测试 CORS 地址 vs 生产 CORS 地址）
+2. **包含凭证/密钥**（绝对不能进代码仓库）
+3. **运维需要修改但不想触发重新发布**
+
+> 快速判断：如果这个值出现在 GitHub 上会让你感到不安，它就应该是 Secret。
+
+### 构建时变量 vs 运行时变量
+
+这是前后端最根本的差异，不是"有没有 return"，而是**消费变量的进程和 compose 注入的容器是否同一个**：
+
+```
+前端（webpack 构建时消费）：
+  GitHub Actions 注入 → webpack 进程读取 → DefinePlugin 烧录进 dist/xxx.js → webpack 退出
+  之后 nginx 容器启动 → compose 注入环境变量 → nginx 完全不认识 → 被忽略
+  dist/ 里的值永远是构建时烧录的那个，运行时无法更改
+
+后端（express 运行时消费）：
+  compose 注入 → 容器启动 → express 进程读取 process.env → 实时生效
+  改了环境变量重启容器即可，不需要重新构建镜像
+```
+
+| | 前端 | 后端 |
+|---|---|---|
+| 变量消费时机 | 构建时（webpack 运行时） | 运行时（express 运行时） |
+| 变量来源 | CI runner 环境 / `.env.development` | compose `environment` / `.env` |
+| 改变量是否需要重新构建 | **是**，值已烧录进 JS 文件 | **否**，重启容器即可 |
+| 变量是否对外暴露 | **是**，打包进 JS 任何人可见 | **否**，只在服务器进程内 |
+
+**结论**：前端变量绝对不能放密钥；后端密钥通过 compose 注入，不进镜像不进代码。
+
+### 本地开发环境变量加载
+
+**前端（webpack.common.js）**：
+```javascript
+// 用 DEPLOY_ENV 区分 CI 和本地，比 NODE_ENV 更准确
+// NODE_ENV 只反映 webpack 构建模式，无法区分业务环境
+// DEPLOY_ENV 只有 CI 平台才会注入，本地不存在
+const isCI = !!process.env.DEPLOY_ENV;
+if (!isCI) {
+  require('dotenv').config({ path: '.env.development' });
+}
+```
+
+**后端（app.ts 第一行）**：
+```typescript
+import 'dotenv/config';
+// 有 .env 文件就读取，没有就静默跳过（无副作用）
+// 容器里 .env 已被 .dockerignore 排除，此行在容器中等同于 no-op
+```
+
+两种方式都正确，适合各自场景：
+- 前端用 `DEPLOY_ENV` 显式判断，因为构建工具需要精确区分"CI 构建"和"本地构建"
+- 后端用文件存在性隐式判断，因为容器里不存在 `.env` 文件本身就是天然开关
+
+### Fail Fast 原则
+
+必需的环境变量（缺失会导致功能异常的），应在启动时立即抛错，而不是用错误的兜底值静默运行：
+
+```typescript
+// ❌ 错误：兜底值在生产环境是错的，但程序会静默运行
+const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3001';
+
+// ✅ 正确：缺失时立即拒绝启动，让问题在部署阶段暴露
+const corsOrigin = process.env.CORS_ORIGIN;
+if (!corsOrigin) {
+  throw new Error('CORS_ORIGIN 环境变量未配置，应用拒绝启动');
+}
+```
+
+`PORT` 可以有兜底值（`3000` 在任何环境都是安全的默认值），`JWT_SECRET` 和 `CORS_ORIGIN` 不能有兜底值（兜底值在生产是错误配置）。
+
+### .env 文件规范
+
+```
+.env            # 本地实际使用，加入 .gitignore 和 .dockerignore，不进仓库不进镜像
+.env.example    # 变量名模板，加注释说明用途，提交到仓库，供新开发者参考
+```
+
+### 本项目 Secrets 完整清单
+
+**业务仓库（前端 / 后端各自配置）**：
+
+| Secret | 用途 |
+|---|---|
+| `DOCKERHUB_USERNAME` | Docker Hub 登录用户名 |
+| `DOCKERHUB_TOKEN` | Docker Hub Access Token，推送镜像 |
+| `INFRA_REPO_TOKEN` | GitHub PAT，触发 infra 仓库 repository_dispatch |
+
+**infra 仓库**：
+
+| Secret | 用途 |
+|---|---|
+| `DOCKERHUB_USERNAME` | 拉取私有镜像时登录 |
+| `DOCKERHUB_TOKEN` | 拉取私有镜像 |
+| `SERVER_HOST` | 服务器 IP |
+| `SERVER_USERNAME` | SSH 登录用户名 |
+| `SERVER_SSH_KEY` | SSH 私钥（完整内容） |
+| `CORS_ORIGIN` | 运行时注入给后端容器，不同环境值不同 |
+| `JWT_SECRET` | JWT 签名密钥，必须是强随机字符串，绝不能硬编码 |
+
+> `INFRA_REPO_TOKEN` 是 GitHub PAT（GitHub 颁发），`DOCKERHUB_TOKEN` 是 Docker Hub Access Token（Docker Hub 颁发），两者都叫 Token 但性质完全不同，不可混用。
+
+---
+
 ## 待完成
 
 - [ ] infra 仓库配置 Secrets
