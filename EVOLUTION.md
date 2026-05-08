@@ -554,6 +554,115 @@ if (!corsOrigin) {
 
 ---
 
+## 阶段八：CI/CD 安全加固
+
+### P0：Secret 不能明文出现在命令行
+
+**问题**：`appleboy/ssh-action` 的 `script` 字段里直接拼接 Secret：
+
+```yaml
+# 危险写法
+script: |
+  JWT_SECRET=${{ secrets.JWT_SECRET }} docker compose up -d
+```
+
+`${{ secrets.XXX }}` 在 `script` 字段里会被展开成明文字符串，**整条命令会出现在服务器的进程列表（`ps aux`）和 shell history 里**，任何能登录服务器的人都能看到密钥值。
+
+**修复**：通过 `env` + `envs` 机制，Secret 经加密通道传入 SSH session：
+
+```yaml
+env:
+  JWT_SECRET: ${{ secrets.JWT_SECRET }}  # runner 层：Secret → runner 环境变量
+  CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+with:
+  envs: JWT_SECRET,CORS_ORIGIN           # ssh-action 加密传入远端 SSH session
+  script: |
+    docker compose up -d                 # 命令行里只有变量名，值不可见
+```
+
+**传递链路**：
+```
+GitHub Secrets（加密存储）
+  → runner 环境变量（内存，不写磁盘）
+  → SSH 加密通道
+  → 远端 shell 环境变量（内存，不出现在命令行）
+  → docker compose 读取
+```
+
+### P1：职责分离——前端部署不传后端变量
+
+前端部署 workflow 原来传了 `CORS_ORIGIN` 和 `JWT_SECRET`，但这两个变量只有后端容器消费。`docker compose up -d frontend` 只重启前端容器，这两个变量传了没有任何作用。
+
+修复后：`deploy-frontend.yml` 只传 `DOCKER_HUB_USERNAME`、`FRONTEND_TAG`、`ENVIRONMENT`，注释说明原因。
+
+### P2：action 版本锁定到 commit hash（供应链安全）
+
+`uses: some-action@v3` 中的 `v3` tag 可以被 action 作者随时覆盖指向新 commit，workflow 会在不知情的情况下执行新代码。若 action 仓库被攻击，攻击者可推送恶意代码并覆盖 tag，在 CI 执行时窃取 Secrets。这是**供应链攻击**（Supply Chain Attack）。
+
+```yaml
+# 改前（tag 可变，存在供应链风险）
+uses: appleboy/ssh-action@v1.0.3
+
+# 改后（hash 不可变，与特定 commit 永久绑定）
+uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+```
+
+**P7 架构师能力边界**：
+- 必须掌握：P0，理解 Secret 传递机制，能在 CR 时识别明文泄露风险
+- 必须了解：P2，知道 tag 可变、hash 不可变、供应链攻击的概念，能在技术评审时识别风险
+- 不需要操作：P2 的日常维护（查 hash、更新版本），这是 DevSecOps / 平台团队或 Dependabot 等工具的职责
+
+---
+
+## 附录：三个仓库 Secrets 配置清单
+
+### 前端业务仓库（security-quiz-game）
+
+| Secret 名 | 来源 | 用途 |
+|---|---|---|
+| `DOCKER_HUB_USERNAME` | Docker Hub 账号名 | `docker login` 登录凭证，`docker tag` 时拼接镜像名 |
+| `DOCKER_HUB_TOKEN` | Docker Hub → Account Settings → Security → Access Tokens | 推送镜像到 Docker Hub（比密码更安全，可单独撤销） |
+| `INFRA_DEPLOY_TOKEN` | GitHub → Settings → Developer settings → Fine-grained PAT，授权 infra 仓库 Contents: Read and Write | 触发 infra 仓库的 `repository_dispatch` 事件，通知 infra 执行部署 |
+
+### 后端业务仓库（security-quiz-game-backend）
+
+与前端仓库完全相同，三个 Secret 各自独立配置（两个仓库共用同一套值即可）：
+
+| Secret 名 | 来源 | 用途 |
+|---|---|---|
+| `DOCKER_HUB_USERNAME` | 同上 | 同上 |
+| `DOCKER_HUB_TOKEN` | 同上 | 同上 |
+| `INFRA_DEPLOY_TOKEN` | 同上（同一个 PAT 可复用） | 同上 |
+
+### infra 仓库
+
+| Secret 名 | 来源 | 用途 |
+|---|---|---|
+| `DOCKER_HUB_USERNAME` | Docker Hub 账号名 | 若镜像为私有，`docker pull` 前需要登录 |
+| `DOCKER_HUB_TOKEN` | Docker Hub Access Token | 拉取私有镜像（公开镜像可省略） |
+| `SERVER_HOST` | 云服务器公网 IP | SSH / SCP 连接目标地址 |
+| `SERVER_USER` | 服务器登录用户名（如 `ubuntu`、`root`） | SSH 登录身份 |
+| `SERVER_SSH_KEY` | 服务器 SSH 私钥完整内容（`~/.ssh/id_rsa` 的内容） | SSH 身份认证，替代密码登录 |
+| `CORS_ORIGIN` | 前端域名（如 `https://yourdomain.com`） | 运行时注入给后端容器，控制 CORS 允许的来源；不同环境值不同，不能硬编码 |
+| `JWT_SECRET` | 强随机字符串（建议 32 位以上） | JWT 签名密钥；泄露后攻击者可伪造任意用户身份，必须保密 |
+
+### 关键说明
+
+**`INFRA_DEPLOY_TOKEN` 的权限配置**：
+- 类型：Fine-grained Personal Access Token（不用 Classic token）
+- 授权仓库：只选 `infra`，不授权其他仓库（最小权限原则）
+- 权限：`Contents: Read and Write`（`repository_dispatch` API 需要此权限）
+- `Metadata: Read-only` 为 GitHub 自动附加，无法去除，无安全风险
+
+**两种 Token 的本质区别**：
+- `DOCKER_HUB_TOKEN`：Docker Hub 颁发，控制镜像仓库的读写权限
+- `INFRA_DEPLOY_TOKEN`：GitHub 颁发，控制 GitHub 仓库的 API 操作权限
+- 两者都叫 Token，但颁发方和控制范围完全不同，不可混用
+
+**Secret 的变量名必须与 yml 文件里的 `secrets.XXX` 完全一致**，大小写敏感。
+
+---
+
 ## 待完成
 
 - [ ] infra 仓库配置 Secrets

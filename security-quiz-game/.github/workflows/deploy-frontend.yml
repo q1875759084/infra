@@ -25,7 +25,7 @@ jobs:
 
     steps:
       - name: Checkout infra 仓库
-        uses: actions/checkout@v4
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
 
       # 统一从 payload 或手动输入中取参数
       - name: 解析部署参数
@@ -42,7 +42,7 @@ jobs:
       # 把 compose 文件从 runner 传到服务器
       # 服务器不需要存放仓库，每次部署由 runner 传输最新配置
       - name: 上传 Compose 文件到服务器
-        uses: appleboy/scp-action@v0.1.7
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
@@ -52,19 +52,25 @@ jobs:
           strip_components: 1
 
       - name: 部署前端到服务器
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          # Secret 通过 env 传入 runner 环境，再由 ssh-action 加密传入 SSH session
+          # 不拼接到命令行，避免明文出现在服务器 ps aux / shell history 中
+          # 前端容器不消费 CORS_ORIGIN / JWT_SECRET，此处不传（职责分离）
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          FRONTEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script_stop: true
+          envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT
           script: |
-            docker pull ${{ secrets.DOCKER_HUB_USERNAME }}/security-quiz-game:${{ steps.params.outputs.IMAGE_TAG }}
-            DOCKER_HUB_USERNAME=${{ secrets.DOCKER_HUB_USERNAME }} \
-            FRONTEND_TAG=${{ steps.params.outputs.IMAGE_TAG }} \
-            CORS_ORIGIN=${{ secrets.CORS_ORIGIN }} \
-            JWT_SECRET=${{ secrets.JWT_SECRET }} \
+            docker pull $DOCKER_HUB_USERNAME/security-quiz-game:$FRONTEND_TAG
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            FRONTEND_TAG=$FRONTEND_TAG \
             docker compose \
               -f ~/deploy/security-quiz-game/docker-compose.yml \
-              -f ~/deploy/security-quiz-game/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml \
+              -f ~/deploy/security-quiz-game/docker-compose.$ENVIRONMENT.yml \
               up -d frontend
