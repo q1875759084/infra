@@ -769,3 +769,89 @@ deploy-prod:
 ### 迁移成本
 
 低。每个 deploy job 加一行 `environment: xxx`，然后把差异化 Secrets 从 Repository 级移入对应 Environment 即可，yml 其余逻辑不变。
+
+---
+
+## 运维操作手册：如何查找 SHA tag 并回滚
+
+### 背景
+
+测试环境部署不打语义化版本 tag，只有 `sha-xxxxxxxx` 格式的镜像 tag。  
+代码仓库通常只有开发人员有权限，但**重新部署/回滚**的操作者可能是运维、负责人，因此需要能在不访问代码仓库的地方查看历史版本。
+
+### SHA tag 的三个查看入口
+
+| 入口 | 路径 | 适合谁 |
+|---|---|---|
+| **Docker Hub Tags 页面** | hub.docker.com → 你的仓库 → Tags | 运维/负责人（无需代码权限） |
+| **GitHub Actions 运行记录** | 业务仓库 → Actions → 对应的 workflow run → deploy-dev job → `Build and push` 步骤日志 | 开发人员 |
+| **Git commit hash** | `git log --oneline -10`，前8位对应 `sha-xxxxxxxx` | 开发人员本地 |
+
+### 在 GitHub Actions 日志里找 SHA
+
+从截图可以看到 `ci` job 只有 lint/build 步骤，没有 Build and push——**镜像构建在 `deploy-dev` job 里**，不在 `ci` job 里。
+
+正确路径：
+1. 点左侧 **deploy-dev** job
+2. 展开 **Build and push** 步骤
+3. 日志里找 `Tags:` 行，格式为：
+   ```
+   Tags: yourname/security-quiz-game:sha-a1b2c3d4
+   ```
+   `sha-a1b2c3d4` 就是填入 infra workflow 的值。
+
+### 可追溯性（Traceability）
+
+Git commit → CI 构建 → Docker tag 三者是同一版本的不同视角：
+
+```
+git commit: a1b2c3d4
+     ↓ CI 构建
+Docker tag: sha-a1b2c3d4
+     ↓ infra 部署
+服务器运行的容器
+```
+
+出了问题可以从任意入口追溯到另外两个，这是可追溯性设计的体现。
+
+### infra 仓库手动部署的三种场景
+
+| 场景 | image_tag 填什么 | 说明 |
+|---|---|---|
+| 推送新代码首次部署 | 不需要手动操作 infra | 业务仓库 workflow 自动触发 |
+| 回滚到某个历史版本 | 填具体的 `sha-xxxxxxxx` | 在 Docker Hub 或 Actions 日志里找 |
+| 重新部署当前版本（如改了 Secrets 需重启） | **留空** | 不拉新镜像，用服务器已有镜像重启容器 |
+
+### Git SHA、Docker Tag、Docker Digest 的关系
+
+Actions 日志里会同时出现两种完全不同的 SHA，容易混淆：
+
+```
+# 第一种：Git commit SHA（40位）
+c97365670f388ac5260bbd6f5d852ca56c1255c7
+
+# 第二种：Docker 镜像 Digest
+sha256:316659faa664555b5eb1044ddaf8a5f4eaf1e5f28463f187d646d5dbac8e53da
+```
+
+三者的完整关系：
+
+```
+git commit sha（c9736567...）
+    ↓ 用前8位命名 Docker tag
+Docker tag（sha-c9736567）  ← 人类操作用这个，是可变的"名字"，指向某个镜像
+    ↓ 指向
+Docker 镜像内容（所有层的字节）
+    ↓ 对内容做 SHA256
+Docker digest（sha256:316659...）  ← 内容指纹，不可变，字节级唯一
+```
+
+**关键认知**：
+
+- Git SHA 是代码变更的唯一编码，既可以用于 `git reset` 代码回滚，也被我们复用为镜像 tag 的命名，实现镜像回滚——本质上 tag 只是一个字符串名字
+- Digest 不是 Docker Hub 生成的，而是构建时由 Docker 引擎对镜像内容计算的，推送时一起上传。同一份代码 + 同一份 Dockerfile 在任何地方构建，digest 相同（确定性构建）
+- Tag 是可变的（可以重新指向另一个镜像），digest 是不可变的内容指纹
+
+**使用场景**：
+- 日常操作（部署/回滚）→ 用 tag（`sha-c9736567`），可读性好
+- 安全审计/溯源 → 用 digest，字节级证明"部署了哪个镜像"

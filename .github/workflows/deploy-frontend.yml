@@ -51,6 +51,20 @@ jobs:
             echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
           fi
 
+      # 临时调试步骤：验证 SSH 连通性，排查完后删除
+      - name: 调试 SSH 连通性
+        run: |
+          echo "${{ secrets.SERVER_SSH_KEY }}" > /tmp/debug_key
+          chmod 600 /tmp/debug_key
+          ssh-keygen -l -f /tmp/debug_key || echo "私钥格式校验失败"
+          ssh -i /tmp/debug_key \
+            -o StrictHostKeyChecking=no \
+            -o ConnectTimeout=10 \
+            -v \
+            ${{ secrets.SERVER_USER }}@${{ secrets.SERVER_HOST }} \
+            'echo SSH连接成功' 2>&1 | tail -30
+          rm /tmp/debug_key
+
       # 把 compose 文件从 runner 传到服务器
       # 服务器不需要存放仓库，每次部署由 runner 传输最新配置
       - name: 上传 Compose 文件到服务器
