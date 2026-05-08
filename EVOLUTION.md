@@ -506,20 +506,73 @@ import 'dotenv/config';
 
 ### Fail Fast 原则
 
-必需的环境变量（缺失会导致功能异常的），应在启动时立即抛错，而不是用错误的兜底值静默运行：
+配置缺失时的处理方式取决于"缺失后服务是否仍能正常运行"：
+
+| 变量 | 缺失时行为 | 原因 |
+|---|---|---|
+| `JWT_SECRET` | 拒绝启动 | 没有它认证功能完全瘫痪，属于核心依赖 |
+| `CORS_ORIGIN` | 空列表，跨域全拒 | 同域部署（nginx 反代）时浏览器不触发 CORS，服务仍正常 |
+| `PORT` | 回退 `3000` | 任何环境下 3000 都是安全的默认值 |
 
 ```typescript
-// ❌ 错误：兜底值在生产环境是错的，但程序会静默运行
-const corsOrigin = process.env.CORS_ORIGIN || 'http://localhost:3001';
-
-// ✅ 正确：缺失时立即拒绝启动，让问题在部署阶段暴露
-const corsOrigin = process.env.CORS_ORIGIN;
-if (!corsOrigin) {
-  throw new Error('CORS_ORIGIN 环境变量未配置，应用拒绝启动');
+// JWT_SECRET：核心依赖，缺失立即拒绝启动
+const SECRET = process.env.JWT_SECRET;
+if (!SECRET) {
+  throw new Error('JWT_SECRET 环境变量未配置，应用拒绝启动');
 }
+
+// CORS_ORIGIN：可选配置，缺失时安全默认（空列表 = 跨域全拒，比允许所有来源更安全）
+// 同域部署（nginx 反代 /api/*）时浏览器不触发 CORS，空列表不影响功能
+// 支持多域名白名单，逗号分隔：CORS_ORIGIN=https://a.com,https://b.com
+const corsOrigins = process.env.CORS_ORIGIN
+  ? process.env.CORS_ORIGIN.split(',').map(o => o.trim())
+  : [];
+
+// PORT：有安全兜底值
+const port = Number(process.env.PORT) || 3000;
 ```
 
-`PORT` 可以有兜底值（`3000` 在任何环境都是安全的默认值），`JWT_SECRET` 和 `CORS_ORIGIN` 不能有兜底值（兜底值在生产是错误配置）。
+**判断标准**：不是"不同环境值不同就要 Fail Fast"，而是"缺失后服务核心功能是否瘫痪"。
+
+### CORS 白名单的管理策略
+
+`CORS_ORIGIN` 是业务配置而非安全凭证（泄露无安全风险），但放在 Secrets 的理由是：
+- 不同环境值不同（本地 localhost，生产真实域名）
+- 增加白名单时只需修改 Secrets 并重新触发部署，无需改代码或重新构建镜像
+- 运维操作，不触碰任何代码仓库
+
+本地 `.env` 开发者自行维护需要的 localhost 端口，不依赖后端代码特判：
+```
+CORS_ORIGIN=http://localhost:5173,http://localhost:3001
+```
+
+生产 Secrets 只填真实域名：
+```
+CORS_ORIGIN=https://yourdomain.com,https://admin.yourdomain.com
+```
+
+**后端代码不包含任何环境判断逻辑**（如 `if localhost` 特判），环境差异完全由配置值决定，这是关注点分离的体现。
+
+企业级演进路径：Secrets → GitHub Variables（非敏感配置语义更清晰）→ 配置中心（热更新，零停机，有审批记录）。
+
+### 白名单三种存放位置的对比
+
+| 方案 | 增加白名单需要 | 适用场景 |
+|---|---|---|
+| **硬编码在后端代码** | 改代码 → 重新构建镜像 → 发版 | ❌ 不可用，业务配置与代码耦合 |
+| **写在 compose yml** | 改 yml → 提交 infra 仓库 → `docker compose up` | 改动有 git 记录，适合改动频率极低的场景 |
+| **写在平台 Secrets/Variables** | 改平台配置 → 手动触发 deploy workflow → 容器重启 | 运维操作，不触碰代码仓库，适合需要独立操作的场景 |
+| **配置中心（Apollo/Nacos）** | 配置中心后台修改 → 自动推送 → 热更新 | 零停机，有审批记录，适合企业级多团队协作 |
+
+**当前项目选择 Secrets 的理由**：
+- 不需要改任何代码或 yml，运维操作闭环
+- 触发重新部署的成本可接受（手动 workflow_dispatch）
+- 相比 compose yml，配置变更不与基础设施变更混在同一次 commit 里
+
+**判断"谁来改、多久改一次"**：
+- 只有开发者改、极少改 → compose yml（进 git，变更有记录）
+- 运维或业务方需要改、较频繁 → Secrets / Variables
+- 需要热更新、有审批流 → 配置中心
 
 ### .env 文件规范
 
@@ -665,6 +718,54 @@ uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
 
 ## 待完成
 
-- [ ] infra 仓库配置 Secrets
-- [ ] 前端/后端仓库配置 INFRA_DEPLOY_TOKEN（需先生成 PAT）
 - [ ] 联调验证整条链路
+
+---
+
+## 备案：迁移到 GitHub Environments 管理 Secrets
+
+### 现状
+
+所有 Secrets 平铺在仓库级（Repository Secrets），deploy-dev 和 deploy-prod 两个 job 读取同一套 Secrets，没有环境隔离。
+
+### 方案
+
+创建两个 Environment：`dev` 和 `prod`，按环境分别配置差异化 Secrets：
+
+```
+dev  environment:
+  CORS_ORIGIN=https://test.yourdomain.com
+  JWT_SECRET=test_secret
+  （SERVER_HOST 等服务器凭证与 prod 相同时可保留在 Repository Secrets）
+
+prod environment:
+  CORS_ORIGIN=https://yourdomain.com
+  JWT_SECRET=prod_strong_secret
+  Required reviewers: 指定审批人（生产部署必须人工审批才能执行）
+```
+
+yml 里每个 job 声明使用的 Environment：
+
+```yaml
+deploy-dev:
+  environment: dev   # 只能读 dev environment 的 Secrets
+
+deploy-prod:
+  environment: prod  # 只能读 prod environment 的 Secrets，且需审批通过
+```
+
+### 价值
+
+| 能力 | 说明 |
+|---|---|
+| 环境隔离 | deploy-dev job 物理上无法读取生产凭证 |
+| 审批门禁 | prod environment 配置 Required reviewers，CD 触发后须人工审批 |
+| 最小权限 | 每个 job 只能访问自己环境的 Secrets |
+
+### 面试说法
+
+> "生产和测试的凭证通过 GitHub Environments 完全隔离，测试 job 物理上拿不到生产 SSH Key。生产 Environment 配置了 Required reviewers，workflow_dispatch 触发后必须指定人审批才能执行，实现了 CI/CD 的双重人工卡点。"
+
+### 迁移成本
+
+低。每个 deploy job 加一行 `environment: xxx`，然后把差异化 Secrets 从 Repository 级移入对应 Environment 即可，yml 其余逻辑不变。
