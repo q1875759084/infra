@@ -8,16 +8,18 @@ on:
   workflow_dispatch:
     inputs:
       image_tag:
-        description: '镜像 tag（如 v1.0.0 或 sha）'
-        required: true
+        description: '镜像 tag（留空则重用服务器当前运行版本，仅重启容器）'
+        required: false
+        default: ''
       environment:
         description: '部署环境'
         required: true
-        default: 'prod'
+        # 手动触发最常见场景是重新部署测试环境，默认 dev
+        default: 'dev'
         type: choice
         options:
-          - prod
           - dev
+          - prod
 
 jobs:
   deploy:
@@ -33,8 +35,18 @@ jobs:
           if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
             echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
             echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+            echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
           else
-            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            if [ -z "$IMAGE_TAG" ]; then
+              # tag 为空：不拉新镜像，直接重启容器（用服务器已有镜像）
+              # 适用场景：配置变更（如 Secrets 更新）后重启，或服务器异常重启恢复
+              echo "IMAGE_TAG=" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=true" >> $GITHUB_OUTPUT
+            else
+              echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
+            fi
             echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
           fi
 
@@ -56,6 +68,7 @@ jobs:
           DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
           BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
           ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+          SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
           CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         with:
@@ -63,9 +76,12 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script_stop: true
-          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,SKIP_PULL
           script: |
-            docker pull $DOCKER_HUB_USERNAME/security-quiz-game-backend:$BACKEND_TAG
+            # SKIP_PULL=true 时跳过拉镜像（tag 为空，重用服务器当前版本）
+            if [ "$SKIP_PULL" != "true" ]; then
+              docker pull $DOCKER_HUB_USERNAME/security-quiz-game-backend:$BACKEND_TAG
+            fi
             DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
             BACKEND_TAG=$BACKEND_TAG \
             CORS_ORIGIN=$CORS_ORIGIN \
