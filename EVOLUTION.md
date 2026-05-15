@@ -855,3 +855,65 @@ Docker digest（sha256:316659...）  ← 内容指纹，不可变，字节级唯
 **使用场景**：
 - 日常操作（部署/回滚）→ 用 tag（`sha-c9736567`），可读性好
 - 安全审计/溯源 → 用 digest，字节级证明"部署了哪个镜像"
+
+---
+
+## 故障记录：镜像加速器白名单拦截（2026-05-08）
+
+### 现象
+
+infra `deploy-backend` workflow 报错：
+
+```
+error from registry: 🚫 这镜像不在白名单. this image is not in the allowlist.
+```
+
+后端镜像（`cmjndy/security-quiz-game-backend:<sha>`）pull 失败，workflow 退出码 1。
+同次 CI 中前端镜像 push 成功，后端容器未更新。
+
+### 根因
+
+服务器 `/etc/docker/daemon.json` 配置了两个第三方镜像加速器：
+
+```json
+{
+  "registry-mirrors": [
+    "https://docker.m.daocloud.io",
+    "https://docker.1ms.run"
+  ]
+}
+```
+
+`docker.m.daocloud.io` 维护一个公共镜像白名单，只代理白名单内的官方镜像（如 `nginx`、`node`）。用户自己的 Docker Hub 镜像（`cmjndy/security-quiz-game-backend`）不在白名单，被该代理拦截并返回错误，Docker 不回退直连 Docker Hub。
+
+### 为什么之前能成功
+
+DaoCloud 的拦截具有不确定性（时效性或流量策略），同一镜像不同时间 pull 结果不同。之前后端首次部署恰好未被拦截，本次触发了拦截。这种不稳定性本身就是引入第三方代理的隐含风险。
+
+### 修复
+
+移除 `docker.m.daocloud.io`，只保留 `docker.1ms.run`（未发现白名单拦截行为）：
+
+```json
+{
+  "registry-mirrors": [
+    "https://docker.1ms.run"
+  ]
+}
+```
+
+```bash
+systemctl restart docker
+```
+
+### 架构结论
+
+第三方镜像加速器是不可控的外部依赖，其行为（白名单策略、可用性）随时可能变化。引入后需要明确：
+
+| 风险 | 说明 |
+|---|---|
+| 白名单拦截 | 只代理官方镜像，私有/用户镜像被拦截 |
+| 不确定性 | 同一镜像不同时间 pull 结果不同，难以定位 |
+| 单点故障 | 加速器宕机时所有 pull 请求失败 |
+
+**判断标准**：加速器只应用于拉取官方基础镜像（构建阶段），不应依赖其代理自有镜像。若需加速自有镜像的分发，应使用私有 Registry（如 Harbor）或 CDN 加速，而非依赖第三方白名单代理。

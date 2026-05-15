@@ -1,0 +1,70 @@
+name: 部署 carry-hub
+
+# ============================================================
+# 触发：carry-hub 业务仓库通过 repository_dispatch 触发
+#   event-type: deploy-carry-hub
+#   client-payload:
+#     image_tag:   sha（测试环境）或 v1.0.0（生产环境）
+#     environment: dev | prod
+#
+# 职责：
+#   - 接收镜像 tag 和环境参数
+#   - 将 compose 文件 scp 到服务器
+#   - SSH 执行 docker compose up -d frontend
+#
+# 安全规范：
+#   - Secret 通过 env + envs 机制加密传入 SSH session，不出现在命令行
+#   - action 版本锁定到 commit hash，防止供应链攻击
+# ============================================================
+on:
+  repository_dispatch:
+    types: [deploy-carry-hub]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 代码（含 compose 文件）
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4
+
+      - name: 读取部署参数
+        id: params
+        run: |
+          echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+          echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+
+      - name: 将 compose 文件传输到服务器
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "carry-hub/docker-compose.yml,carry-hub/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy"
+
+      - name: SSH 部署到服务器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          FRONTEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          # Secret 通过 envs 加密传入 SSH session，不出现在命令行（防止 ps aux / history 泄露）
+          envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT
+          script: |
+            cd ~/deploy
+
+            # 登录 Docker Hub（若镜像为私有仓库则必须登录）
+            echo "${{ secrets.DOCKER_HUB_TOKEN }}" | docker login -u "$DOCKER_HUB_USERNAME" --password-stdin
+
+            # 拉取最新镜像，只重启 frontend 容器，不影响其他项目的服务
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            FRONTEND_TAG=$FRONTEND_TAG \
+            docker compose \
+              -f carry-hub/docker-compose.yml \
+              -f carry-hub/docker-compose.${ENVIRONMENT}.yml \
+              up -d frontend

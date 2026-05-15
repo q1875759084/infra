@@ -1,0 +1,8 @@
+services:
+  # ==================== 前端：Nginx 托管静态文件 ====================
+  # 唯一对外暴露的入口，所有流量经过 Nginx
+  # carry-hub 是纯前端项目，无后端服务，Nginx 直接托管 Vite 构建产物
+  # 端口映射由环境覆盖文件决定（docker-compose.prod.yml / docker-compose.dev.yml）
+  frontend:
+    image: ${DOCKER_HUB_USERNAME}/carry-hub:${FRONTEND_TAG:-latest}
+    restart: always
