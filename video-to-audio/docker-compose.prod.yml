@@ -1,0 +1,12 @@
+services:
+  frontend:
+    ports:
+      - "3090:80"  # 生产端口，与其他项目错开（carry-hub: 3080）
+  backend:
+    volumes:
+      - vta-files-prod:/app/files       # 音频文件持久化
+      - vta-db-prod:/app/database       # SQLite 数据库持久化
+
+volumes:
+  vta-files-prod:
+  vta-db-prod:

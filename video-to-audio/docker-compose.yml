@@ -1,0 +1,29 @@
+services:
+  # ==================== 前端：Nginx 托管静态文件 + 反向代理 ====================
+  # 唯一对外暴露的入口，所有流量经过 Nginx
+  # 静态文件直接返回，/api/* 转发给 backend 服务
+  # SSE 接口（/api/convert/progress/*）单独配置无缓冲代理
+  frontend:
+    image: ${DOCKER_HUB_USERNAME}/video-to-audio:${FRONTEND_TAG:-latest}
+    depends_on:
+      - backend
+    restart: always
+
+  # ==================== 后端：Node.js Express 服务 ====================
+  # 不对外直接暴露，只在 Compose 内部网络可访问
+  # 镜像内已安装 ffmpeg 和 yt-dlp
+  backend:
+    image: ${DOCKER_HUB_USERNAME}/video-to-audio-backend:${BACKEND_TAG:-latest}
+    expose:
+      - "${BACKEND_PORT:-3000}"
+    environment:
+      - PORT=${BACKEND_PORT:-3000}
+      - CORS_ORIGIN=${CORS_ORIGIN}
+      - JWT_SECRET=${JWT_SECRET}
+      - NODE_ENV=production
+      # 预设账号配置（初期硬编码，后续可通过此环境变量覆盖）
+      - PRESET_USER_1=${PRESET_USER_1:-admin}
+      - PRESET_PASS_1=${PRESET_PASS_1}
+      - PRESET_NICK_1=${PRESET_NICK_1:-管理员}
+    # volumes 由环境覆盖文件声明，生产和测试数据完全隔离
+    restart: always
