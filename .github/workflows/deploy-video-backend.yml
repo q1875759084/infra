@@ -69,8 +69,8 @@ jobs:
           BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
           ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
           SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
-          CORS_ORIGIN: ${{ secrets.VTA_CORS_ORIGIN }}
-          JWT_SECRET: ${{ secrets.VTA_JWT_SECRET }}
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
