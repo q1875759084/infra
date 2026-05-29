@@ -71,13 +71,12 @@ jobs:
           SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
           CORS_ORIGIN: ${{ secrets.VTA_CORS_ORIGIN }}
           JWT_SECRET: ${{ secrets.VTA_JWT_SECRET }}
-          PRESET_PASS_1: ${{ secrets.VTA_PRESET_PASS_1 }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script_stop: true
-          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,PRESET_PASS_1,SKIP_PULL
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,SKIP_PULL
           script: |
             # SKIP_PULL=true 时跳过拉镜像（tag 为空，重用服务器当前版本）
             if [ "$SKIP_PULL" != "true" ]; then
@@ -87,7 +86,6 @@ jobs:
             BACKEND_TAG=$BACKEND_TAG \
             CORS_ORIGIN=$CORS_ORIGIN \
             JWT_SECRET=$JWT_SECRET \
-            PRESET_PASS_1=$PRESET_PASS_1 \
             docker compose \
               -f ~/deploy/video-to-audio/docker-compose.yml \
               -f ~/deploy/video-to-audio/docker-compose.$ENVIRONMENT.yml \

@@ -21,9 +21,20 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN}
       - JWT_SECRET=${JWT_SECRET}
       - NODE_ENV=production
-      # 预设账号配置（初期硬编码，后续可通过此环境变量覆盖）
-      - PRESET_USER_1=${PRESET_USER_1:-admin}
-      - PRESET_PASS_1=${PRESET_PASS_1}
-      - PRESET_NICK_1=${PRESET_NICK_1:-管理员}
+      # 预设账号直接写死在代码里（试验阶段，无注册功能）
+      # 待支持正式注册流程后移除
     # volumes 由环境覆盖文件声明，生产和测试数据完全隔离
     restart: always
+    deploy:
+      resources:
+        limits:
+          # 服务器 2 核，本服务最多用 1.5 核
+          # 保留 0.5 核给宿主机 + 其他服务（nginx、security-quiz-game 等）
+          # queue.ts 的 MAX_CONCURRENT=1 与此对齐：1 个 ffmpeg 约用 1 核，留 0.5 给 Node.js
+          cpus: '1.5'
+          # 内存上限：yt-dlp 缓存 + ffmpeg 解码缓冲 + Node.js 堆
+          memory: 768M
+        reservations:
+          # 软保证：系统繁忙时至少保留 0.5 核给 Node.js 事件循环响应请求
+          cpus: '0.5'
+          memory: 256M
