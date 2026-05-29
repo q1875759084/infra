@@ -5,8 +5,8 @@ services:
   # SSE 接口（/api/convert/progress/*）单独配置无缓冲代理
   frontend:
     image: ${DOCKER_HUB_USERNAME}/video-to-audio:${FRONTEND_TAG:-latest}
-    depends_on:
-      - backend
+    # 不设置 depends_on：前后端独立部署，互不干扰
+    # backend 未启动时 nginx 对 /api/* 返回 502，不影响前端容器本身启动
     restart: always
 
   # ==================== 后端：Node.js Express 服务 ====================
