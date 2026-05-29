@@ -1,0 +1,96 @@
+name: 部署 video-to-audio 后端
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-video-backend
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '镜像 tag（留空则重用服务器当前运行版本，仅重启容器）'
+        required: false
+        default: ''
+      environment:
+        description: '部署环境'
+        required: true
+        # 手动触发最常见场景是重新部署测试环境，默认 dev
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 仓库
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+            echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
+          else
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            if [ -z "$IMAGE_TAG" ]; then
+              # tag 为空：不拉新镜像，直接重启容器（用服务器已有镜像）
+              # 适用场景：配置变更（如 Secrets 更新）后重启，或服务器异常重启恢复
+              echo "IMAGE_TAG=" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=true" >> $GITHUB_OUTPUT
+            else
+              echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
+            fi
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 上传 Compose 文件到服务器
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "video-to-audio/docker-compose.yml,video-to-audio/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/video-to-audio/"
+          strip_components: 1
+
+      - name: 部署后端到服务器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          # Secret 通过 env 传入 runner 环境，再由 ssh-action 加密传入 SSH session
+          # 不拼接到命令行，避免明文出现在服务器 ps aux / shell history 中
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+          SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
+          CORS_ORIGIN: ${{ secrets.VTA_CORS_ORIGIN }}
+          JWT_SECRET: ${{ secrets.VTA_JWT_SECRET }}
+          PRESET_PASS_1: ${{ secrets.VTA_PRESET_PASS_1 }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: true
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,PRESET_PASS_1,SKIP_PULL
+          script: |
+            # SKIP_PULL=true 时跳过拉镜像（tag 为空，重用服务器当前版本）
+            if [ "$SKIP_PULL" != "true" ]; then
+              docker pull $DOCKER_HUB_USERNAME/video-to-audio-backend:$BACKEND_TAG
+            fi
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            BACKEND_TAG=$BACKEND_TAG \
+            CORS_ORIGIN=$CORS_ORIGIN \
+            JWT_SECRET=$JWT_SECRET \
+            PRESET_PASS_1=$PRESET_PASS_1 \
+            docker compose \
+              -f ~/deploy/video-to-audio/docker-compose.yml \
+              -f ~/deploy/video-to-audio/docker-compose.$ENVIRONMENT.yml \
+              up -d --no-deps backend
+            # --no-deps：只启动 backend 服务，不拉取/启动 frontend 等依赖服务
+            # 前后端独立部署，各自管理自己的镜像，互不干扰
