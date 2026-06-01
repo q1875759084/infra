@@ -50,13 +50,15 @@ jobs:
             echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
           fi
 
-      - name: 上传 Compose 文件到服务器
+      - name: 上传 Compose 文件和环境配置到服务器
         uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
-          source: "video-to-audio/docker-compose.yml,video-to-audio/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          # .env.{environment} 包含非敏感的环境差异配置（如 CORS_ORIGIN）
+          # 敏感配置（JWT_SECRET）仍通过 GitHub Secrets 在下一步注入
+          source: "video-to-audio/docker-compose.yml,video-to-audio/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml,video-to-audio/.env.${{ steps.params.outputs.ENVIRONMENT }}"
           target: "~/deploy/video-to-audio/"
           strip_components: 1
 
@@ -65,26 +67,27 @@ jobs:
         env:
           # Secret 通过 env 传入 runner 环境，再由 ssh-action 加密传入 SSH session
           # 不拼接到命令行，避免明文出现在服务器 ps aux / shell history 中
+          # CORS_ORIGIN 已移至 .env.{environment} 文件，不再通过 Secrets 传递
           DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
           BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
           ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
           SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
-          CORS_ORIGIN: ${{ secrets.VTA_CORS_ORIGIN }}
           JWT_SECRET: ${{ secrets.JWT_SECRET }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script_stop: true
-          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,SKIP_PULL
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,JWT_SECRET,SKIP_PULL
           script: |
+            # .env.{environment} 包含非敏感环境配置，重命名为 .env 供 compose 自动读取
+            cp ~/deploy/video-to-audio/.env.$ENVIRONMENT ~/deploy/video-to-audio/.env
             # SKIP_PULL=true 时跳过拉镜像（tag 为空，重用服务器当前版本）
             if [ "$SKIP_PULL" != "true" ]; then
               docker pull $DOCKER_HUB_USERNAME/video-to-audio-backend:$BACKEND_TAG
             fi
             DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
             BACKEND_TAG=$BACKEND_TAG \
-            CORS_ORIGIN=$CORS_ORIGIN \
             JWT_SECRET=$JWT_SECRET \
             docker compose \
               -f ~/deploy/video-to-audio/docker-compose.yml \
