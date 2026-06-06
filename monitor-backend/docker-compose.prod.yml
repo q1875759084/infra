@@ -1,0 +1,11 @@
+services:
+  monitor-backend:
+    # 生产实例固定容器名，供各业务 nginx 通过容器名寻址（共享网络接入后生效）
+    container_name: monitor-backend-prod
+    ports:
+      - "3100:3100"  # 生产端口，对外暴露供业务 nginx proxy_pass
+    volumes:
+      - monitor-db-prod:/app/database  # SQLite 数据库持久化，与测试数据隔离
+
+volumes:
+  monitor-db-prod:

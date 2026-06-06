@@ -2,6 +2,11 @@ services:
   frontend:
     ports:
       - "3090:80"  # 生产端口，与其他项目错开（carry-hub: 3080）
+    environment:
+      # monitor-backend 生产实例，数据与测试隔离
+      - MONITOR_BACKEND_URL=http://host-gateway:3100
+    extra_hosts:
+      - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
   backend:
     volumes:
       - vta-files-prod:/app/files       # 音频文件持久化

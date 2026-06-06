@@ -2,6 +2,12 @@ services:
   frontend:
     ports:
       - "3091:80"  # 测试端口
+    environment:
+      # monitor-backend 测试实例，数据与生产隔离
+      # 127.0.0.1 指向宿主机（容器内访问宿主机进程），需在 extra_hosts 中声明
+      - MONITOR_BACKEND_URL=http://host-gateway:3101
+    extra_hosts:
+      - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
   backend:
     volumes:
       - vta-files-dev:/app/files        # 测试音频文件，与生产隔离

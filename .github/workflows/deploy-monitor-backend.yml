@@ -1,0 +1,86 @@
+name: 部署 monitor-backend
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-monitor-backend
+
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '镜像 tag（留空则重用服务器当前运行版本，仅重启容器）'
+        required: false
+        default: ''
+      environment:
+        description: '部署环境'
+        required: true
+        default: 'dev'
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 仓库
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4
+
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+            echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
+          else
+            IMAGE_TAG="${{ inputs.image_tag }}"
+            if [ -z "$IMAGE_TAG" ]; then
+              # tag 为空：不拉新镜像，直接重启容器（用服务器已有镜像）
+              # 适用场景：配置变更（如 CORS_ORIGIN 更新）后重启，或服务器异常重启恢复
+              echo "IMAGE_TAG=" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=true" >> $GITHUB_OUTPUT
+            else
+              echo "IMAGE_TAG=$IMAGE_TAG" >> $GITHUB_OUTPUT
+              echo "SKIP_PULL=false" >> $GITHUB_OUTPUT
+            fi
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 上传 Compose 文件到服务器
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "monitor-backend/docker-compose.yml,monitor-backend/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/monitor-backend/"
+          strip_components: 1
+
+      - name: 部署到服务器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          # Secret 通过 env 传入 runner 环境，再由 ssh-action 加密传入 SSH session
+          # 不拼接到命令行，避免明文出现在服务器 ps aux / shell history 中
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          MONITOR_BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+          SKIP_PULL: ${{ steps.params.outputs.SKIP_PULL }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          script_stop: true
+          envs: DOCKER_HUB_USERNAME,MONITOR_BACKEND_TAG,ENVIRONMENT,SKIP_PULL
+          script: |
+            if [ "$SKIP_PULL" != "true" ]; then
+              docker pull $DOCKER_HUB_USERNAME/monitor-backend:$MONITOR_BACKEND_TAG
+            fi
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            MONITOR_BACKEND_TAG=$MONITOR_BACKEND_TAG \
+            docker compose \
+              -f ~/deploy/monitor-backend/docker-compose.yml \
+              -f ~/deploy/monitor-backend/docker-compose.$ENVIRONMENT.yml \
+              up -d --no-deps monitor-backend

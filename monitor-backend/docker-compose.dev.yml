@@ -1,0 +1,11 @@
+services:
+  monitor-backend:
+    # 测试实例固定容器名，与生产容器名不同，可在同一服务器并行运行
+    container_name: monitor-backend-dev
+    ports:
+      - "3101:3100"  # 测试端口 3101 映射容器内 3100，与生产端口错开
+    volumes:
+      - monitor-db-dev:/app/database  # 测试数据库，与生产完全隔离
+
+volumes:
+  monitor-db-dev:
