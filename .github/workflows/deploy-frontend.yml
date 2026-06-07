@@ -78,10 +78,10 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           script_stop: true
-          envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT,SKIP_PULL
+          envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT
           script: |
-            # SKIP_PULL=true 时跳过拉镜像（tag 为空，重用服务器当前版本）
-            if [ "$SKIP_PULL" != "true" ]; then
+            # SKIP_PULL 直接由 runner 注入为字面值，避免 envs 传递空变量时的不可靠行为
+            if [ "${{ steps.params.outputs.SKIP_PULL }}" != "true" ]; then
               docker pull $DOCKER_HUB_USERNAME/security-quiz-game:$FRONTEND_TAG
             fi
             DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
