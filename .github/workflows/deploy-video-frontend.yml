@@ -89,6 +89,8 @@ jobs:
             docker compose \
               -f ~/deploy/video-to-audio/docker-compose.yml \
               -f ~/deploy/video-to-audio/docker-compose.$ENVIRONMENT.yml \
-              up -d --no-deps frontend
+              up -d --no-deps --no-build \
+              $( [ "${{ steps.params.outputs.SKIP_PULL }}" = "true" ] && echo "--no-pull" ) \
+              frontend
             # --no-deps：只启动 frontend 服务，不拉取/启动 backend 等依赖服务
             # 前后端独立部署，各自管理自己的镜像，互不干扰
