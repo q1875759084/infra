@@ -80,17 +80,21 @@ jobs:
           script_stop: true
           envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT
           script: |
-            # SKIP_PULL 直接由 runner 注入为字面值，避免 envs 传递空变量时的不可靠行为
-            if [ "${{ steps.params.outputs.SKIP_PULL }}" != "true" ]; then
+            if [ "${{ steps.params.outputs.SKIP_PULL }}" = "true" ]; then
+              # tag 为空：不拉新镜像，直接重启已有容器（配置变更 / 异常恢复场景）
+              docker compose \
+                -f ~/deploy/security-quiz-game/docker-compose.yml \
+                -f ~/deploy/security-quiz-game/docker-compose.$ENVIRONMENT.yml \
+                restart frontend
+            else
+              # 正常部署：拉新镜像后重建容器
               docker pull $DOCKER_HUB_USERNAME/security-quiz-game:$FRONTEND_TAG
+              DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+              FRONTEND_TAG=$FRONTEND_TAG \
+              docker compose \
+                -f ~/deploy/security-quiz-game/docker-compose.yml \
+                -f ~/deploy/security-quiz-game/docker-compose.$ENVIRONMENT.yml \
+                up -d --no-deps --no-build frontend
             fi
-            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
-            FRONTEND_TAG=$FRONTEND_TAG \
-            docker compose \
-              -f ~/deploy/security-quiz-game/docker-compose.yml \
-              -f ~/deploy/security-quiz-game/docker-compose.$ENVIRONMENT.yml \
-              up -d --no-deps --no-build \
-              $( [ "${{ steps.params.outputs.SKIP_PULL }}" = "true" ] && echo "--no-pull" ) \
-              frontend
             # --no-deps：只启动 frontend 服务，不拉取/启动 backend 等依赖服务
             # 前后端独立部署，各自管理自己的镜像，互不干扰
