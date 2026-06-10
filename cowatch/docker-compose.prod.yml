@@ -1,0 +1,17 @@
+services:
+  frontend:
+    ports:
+      - "3070:80"  # 生产端口（端口分配：carry-hub: 3080, video-to-audio: 3090）
+    environment:
+      # monitor-backend 生产实例
+      - MONITOR_BACKEND_URL=http://host-gateway:3100
+    extra_hosts:
+      - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
+  backend:
+    volumes:
+      - cowatch-db-prod:/app/database     # SQLite 数据库持久化
+      - cowatch-uploads-prod:/app/uploads # 本地模式视频文件持久化（COS 模式下无写入）
+
+volumes:
+  cowatch-db-prod:
+  cowatch-uploads-prod:

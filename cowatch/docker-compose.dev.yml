@@ -1,0 +1,17 @@
+services:
+  frontend:
+    ports:
+      - "3071:80"  # 测试端口，与生产端口 3070 错开
+    environment:
+      # monitor-backend 测试实例，数据与生产隔离
+      - MONITOR_BACKEND_URL=http://host-gateway:3101
+    extra_hosts:
+      - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
+  backend:
+    volumes:
+      - cowatch-db-dev:/app/database     # 测试数据库，与生产数据完全隔离
+      - cowatch-uploads-dev:/app/uploads # 测试视频文件，与生产隔离
+
+volumes:
+  cowatch-db-dev:
+  cowatch-uploads-dev:

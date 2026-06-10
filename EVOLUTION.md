@@ -177,6 +177,41 @@ infra 仓库监听事件，拿到 image_tag 和 environment，执行对应的 co
   → 只有环境变量（CORS_ORIGIN、数据库地址等）不同
 ```
 
+### 一次构建原则的边界：前端编译时变量（以 video-to-audio 为例）
+
+后端可以严格遵守一次构建原则，因为所有环境差异通过运行时环境变量注入，镜像本身不含任何环境值。
+
+**前端不同**：`webpack DefinePlugin` 在构建阶段就把环境值静态烧录进 JS bundle：
+
+```
+docker build → webpack 运行 → DefinePlugin 替换 __DEPLOY_ENV__ → 写入 dist/*.js → webpack 退出
+之后 Nginx 容器启动 → compose 注入环境变量 → Nginx 完全不感知 → 被忽略
+```
+
+bundle 里的值永远是构建时决定的，运行时无法更改。
+
+**video-to-audio 遇到的实际问题**：
+
+`deploy-dev` 的 `docker build` 命令没有传 `--build-arg DEPLOY_ENV=test`，`ARG DEPLOY_ENV` 拿到空值，webpack 兜底 `process.env.DEPLOY_ENV || 'dev'` 生成 `'dev'`，导致：
+- 测试环境部署后，monitor SDK 进入 `development` 模式
+- `debug: true` → 控制台有 `[monitor]` 日志打印
+- `env: 'development'` → SDK 判定为本地开发，**不发送任何上报请求**
+
+修复：`docker build --build-arg DEPLOY_ENV=test`，使测试环境镜像里 `__DEPLOY_ENV__ = 'test'`，SDK 进入 `staging` 模式正常上报。
+
+**生产环境的矛盾**：`deploy-prod` 遵循一次构建原则，不重新构建，直接给 `deploy-dev` 的 sha 镜像追加 v1.0.0 tag。这导致生产镜像里 `__DEPLOY_ENV__` 仍是 `'test'`，monitor SDK 上报时 `env` 字段为 `staging` 而非 `production`，数据能上报但标记不准确。
+
+**企业级的两种主流解法**：
+
+| 方案 | 做法 | 适用场景 |
+|---|---|---|
+| **方案 A：每环境独立构建** | `deploy-prod` 也执行 `docker build --build-arg DEPLOY_ENV=production`，放弃严格的一次构建 | 大多数中小团队，简单直接 |
+| **方案 B：运行时配置注入** | Nginx 提供 `/config.js` 端点，内容由服务端动态生成；前端读 `window.__APP_CONFIG__` 而非编译时常量，真正做到一次构建多环境运行 | 大厂标准（美团/字节内部系统普遍如此） |
+
+**当前项目现状**：方案 A 的残缺版（只在 `deploy-dev` 传了 `DEPLOY_ENV`，`deploy-prod` 未处理）。接受现状的理由：`staging` 和 `production` 对 monitor 来说上报行为一致，只是 `env` 字段值不同，不影响数据完整性；若未来有数据分环境查询的需求，再做方案 A 补全或方案 B 改造。
+
+---
+
 ### 独立发布的技术基础
 `docker compose up -d frontend` 或 `up -d backend`：
 - 只重启指定服务的容器

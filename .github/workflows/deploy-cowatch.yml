@@ -1,0 +1,175 @@
+name: CoWatch 部署
+
+# ==================== 触发说明 ====================
+# 本 workflow 由业务仓库（CoWatch / CoWatch-backend）通过 repository_dispatch 触发
+# 前端触发事件：deploy-cowatch-frontend
+# 后端触发事件：deploy-cowatch-backend
+#
+# payload 格式：
+#   { "image_tag": "sha-a1b2c3d4" | "v1.0.0", "environment": "dev" | "prod" }
+#
+# 也支持手动触发（workflow_dispatch），用于：
+#   - 回滚：填写历史 sha tag
+#   - 重新部署当前版本（如改了 Secrets 需重启容器）：image_tag 留空
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-cowatch-frontend
+      - deploy-cowatch-backend
+  workflow_dispatch:
+    inputs:
+      service:
+        description: '部署目标'
+        required: true
+        type: choice
+        options:
+          - frontend
+          - backend
+      image_tag:
+        description: '镜像 tag（留空则不拉新镜像，用已有镜像重启）'
+        required: false
+        type: string
+      environment:
+        description: '部署环境'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  # ==================== 前端部署 ====================
+  deploy-frontend:
+    if: >
+      (github.event_name == 'repository_dispatch' && github.event.action == 'deploy-cowatch-frontend') ||
+      (github.event_name == 'workflow_dispatch' && inputs.service == 'frontend')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 代码（含 compose 文件）
+        uses: actions/checkout@v4
+
+      # 统一读取参数（兼容 repository_dispatch 和 workflow_dispatch 两种触发方式）
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 传送 compose 文件到服务器
+        uses: appleboy/scp-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "cowatch/docker-compose.yml,cowatch/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/"
+          strip_components: 0
+
+      - name: SSH 部署前端容器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          FRONTEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: DOCKER_HUB_USERNAME,FRONTEND_TAG,ENVIRONMENT
+          script_stop: true
+          script: |
+            cd ~/deploy/cowatch
+
+            # 若传入了新 tag，先拉取镜像；留空则跳过 pull，直接重启（用本地已有镜像）
+            if [ -n "$FRONTEND_TAG" ]; then
+              docker pull $DOCKER_HUB_USERNAME/cowatch:$FRONTEND_TAG
+            fi
+
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            FRONTEND_TAG=${FRONTEND_TAG:-latest} \
+              docker compose \
+                -f docker-compose.yml \
+                -f docker-compose.$ENVIRONMENT.yml \
+                up -d frontend
+
+  # ==================== 后端部署 ====================
+  deploy-backend:
+    if: >
+      (github.event_name == 'repository_dispatch' && github.event.action == 'deploy-cowatch-backend') ||
+      (github.event_name == 'workflow_dispatch' && inputs.service == 'backend')
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 代码
+        uses: actions/checkout@v4
+
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 传送 compose 文件到服务器
+        uses: appleboy/scp-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "cowatch/docker-compose.yml,cowatch/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/"
+          strip_components: 0
+
+      - name: SSH 部署后端容器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          BACKEND_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+          # 后端运行时变量（通过 envs 加密通道传入，不出现在命令行）
+          CORS_ORIGIN: ${{ secrets.CORS_ORIGIN }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          COS_REGION: ${{ secrets.COS_REGION }}
+          COS_BUCKET: ${{ secrets.COS_BUCKET }}
+          COS_SECRET_ID: ${{ secrets.COS_SECRET_ID }}
+          COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
+          COS_BASE_URL: ${{ secrets.COS_BASE_URL }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USERNAME }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          # 加密通道传入：Secret 经 runner 环境变量 → SSH 会话环境变量 → compose 读取
+          # 值不出现在命令行（ps aux / shell history 不可见）
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,COS_REGION,COS_BUCKET,COS_SECRET_ID,COS_SECRET_KEY,COS_BASE_URL
+          script_stop: true
+          script: |
+            cd ~/deploy/cowatch
+
+            if [ -n "$BACKEND_TAG" ]; then
+              docker pull $DOCKER_HUB_USERNAME/cowatch-backend:$BACKEND_TAG
+            fi
+
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            BACKEND_TAG=${BACKEND_TAG:-latest} \
+            CORS_ORIGIN=$CORS_ORIGIN \
+            JWT_SECRET=$JWT_SECRET \
+            COS_REGION=$COS_REGION \
+            COS_BUCKET=$COS_BUCKET \
+            COS_SECRET_ID=$COS_SECRET_ID \
+            COS_SECRET_KEY=$COS_SECRET_KEY \
+            COS_BASE_URL=$COS_BASE_URL \
+              docker compose \
+                -f docker-compose.yml \
+                -f docker-compose.$ENVIRONMENT.yml \
+                up -d backend
