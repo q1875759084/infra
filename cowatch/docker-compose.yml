@@ -5,8 +5,6 @@ services:
   # 端口映射由环境覆盖文件决定（docker-compose.prod.yml / docker-compose.dev.yml）
   frontend:
     image: ${DOCKER_HUB_USERNAME}/cowatch:${FRONTEND_TAG:-latest}
-    depends_on:
-      - backend
     restart: always
 
   # ==================== 后端：Node.js Express + WebSocket 服务 ====================
