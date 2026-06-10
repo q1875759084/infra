@@ -27,6 +27,8 @@ services:
       - COS_SECRET_KEY=${COS_SECRET_KEY:-}
       # CDN 域名（接入 CDN 后填写，否则留空使用 COS 默认域名）
       - COS_BASE_URL=${COS_BASE_URL:-}
+      # CDN TypeA 鉴权密钥（CDN 控制台 → 访问控制 → 鉴权配置，留空则回退到 COS 签名模式）
+      - CDN_AUTH_KEY=${CDN_AUTH_KEY:-}
     # volumes 由环境覆盖文件声明，生产和测试数据完全隔离
     restart: always
     deploy:
