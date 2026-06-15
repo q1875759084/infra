@@ -101,7 +101,7 @@ jobs:
               docker compose \
                 -f docker-compose.yml \
                 -f docker-compose.$ENVIRONMENT.yml \
-                up -d frontend
+                up -d --no-pull frontend
 
   # ==================== 后端部署 ====================
   deploy-backend:
@@ -182,4 +182,4 @@ jobs:
               docker compose \
                 -f docker-compose.yml \
                 -f docker-compose.$ENVIRONMENT.yml \
-                up -d backend
+                up -d --no-pull backend
