@@ -89,7 +89,7 @@ jobs:
 
             # 若传入了新 tag，先拉取镜像；留空则跳过 pull，直接重启（用本地已有镜像）
             if [ -n "$FRONTEND_TAG" ]; then
-              docker pull $DOCKER_HUB_USERNAME/cowatch:$FRONTEND_TAG
+              docker pull docker.io/$DOCKER_HUB_USERNAME/cowatch:$FRONTEND_TAG
             else
               # tag 留空时：从本地已有镜像中自动获取当前运行的 tag，避免回落到不存在的 latest
               FRONTEND_TAG=$(docker inspect --format='{{index .RepoTags 0}}' $(docker ps -q --filter name=cowatch-frontend) 2>/dev/null | awk -F: '{print $2}')
@@ -162,7 +162,7 @@ jobs:
             cd ~/deploy/cowatch
 
             if [ -n "$BACKEND_TAG" ]; then
-              docker pull $DOCKER_HUB_USERNAME/cowatch-backend:$BACKEND_TAG
+              docker pull docker.io/$DOCKER_HUB_USERNAME/cowatch-backend:$BACKEND_TAG
             else
               # tag 留空时：从本地已有镜像中自动获取当前运行的 tag，避免回落到不存在的 latest
               BACKEND_TAG=$(docker inspect --format='{{index .RepoTags 0}}' $(docker ps -q --filter name=cowatch-backend) 2>/dev/null | awk -F: '{print $2}')
