@@ -150,13 +150,15 @@ jobs:
           COS_SECRET_KEY: ${{ secrets.COS_SECRET_KEY }}
           COS_BASE_URL: ${{ secrets.COS_BASE_URL }}
           CDN_AUTH_KEY: ${{ secrets.CDN_AUTH_KEY }}
+          COS_STATIC_BUCKET: ${{ secrets.COS_STATIC_BUCKET }}
+          COS_STATIC_URL: ${{ secrets.COS_STATIC_URL }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           # 加密通道传入：Secret 经 runner 环境变量 → SSH 会话环境变量 → compose 读取
           # 值不出现在命令行（ps aux / shell history 不可见）
-          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,COS_REGION,COS_BUCKET,COS_SECRET_ID,COS_SECRET_KEY,COS_BASE_URL,CDN_AUTH_KEY
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,COS_REGION,COS_BUCKET,COS_SECRET_ID,COS_SECRET_KEY,COS_BASE_URL,CDN_AUTH_KEY,COS_STATIC_BUCKET,COS_STATIC_URL
           script_stop: true
           script: |
             cd ~/deploy/cowatch
@@ -179,6 +181,8 @@ jobs:
             COS_SECRET_KEY=$COS_SECRET_KEY \
             COS_BASE_URL=$COS_BASE_URL \
             CDN_AUTH_KEY=$CDN_AUTH_KEY \
+            COS_STATIC_BUCKET=$COS_STATIC_BUCKET \
+            COS_STATIC_URL=$COS_STATIC_URL \
               docker compose \
                 -f docker-compose.yml \
                 -f docker-compose.$ENVIRONMENT.yml \
