@@ -45,7 +45,7 @@ jobs:
           fi
 
       - name: 传送 compose 文件到服务器
-        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d17f967dacf36262  # v0.1.7
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d61bdc6c8be94634  # v0.1.7
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
