@@ -33,6 +33,41 @@
 
 ---
 
+## daibao-dashboard 端口（内部运营工具，不绑域名）
+
+daibao-dashboard 是内部运营大盘，不对外绑定子域名，直接通过宿主机端口访问（服务器内网 / VPN）。
+
+| 环境 | 容器 | 宿主机端口 | 说明 |
+|------|------|-----------|------|
+| 生产 | daibao-1（prod） | `6000` | `0.0.0.0:6000:80` |
+| 测试 | daibao-1（dev） | `6001` | `0.0.0.0:6001:80` |
+
+### daibao-dashboard 依赖的后端端口（仅宿主机本地可达）
+
+| 服务 | 宿主机端口 | 绑定方式 | 说明 |
+|------|-----------|---------|------|
+| cowatch-backend（生产） | `8000` | `127.0.0.1:8000:3002` | 不对外暴露；daibao 容器经 `host-gateway` 访问 |
+| cowatch-backend（测试） | `8001` | `127.0.0.1:8001:3002` | 同上 |
+| monitor-backend（生产） | `3100` | — | monitor 独立部署，daibao 容器经 `host-gateway` 访问 |
+| monitor-backend（测试） | `3101` | — | 同上 |
+
+> **`127.0.0.1` 绑定的安全语义：** 端口不对公网开放，只有宿主机进程和同宿主机的容器（通过 `host-gateway`）可以访问。宿主机安全组无需为这些端口开规则。
+
+### host-gateway 工作原理
+
+daibao-dashboard 容器与 cowatch 容器属于不同 Docker Compose 网格，不共享内部 DNS。通过 `extra_hosts: host-gateway:host-gateway` 将宿主机 IP 注入容器的 `/etc/hosts`，容器内 Nginx 用 `http://host-gateway:8000` 即可访问宿主机上由其他 Compose 启动的服务。
+
+```
+daibao 容器内 Nginx
+  → proxy_pass http://host-gateway:8000  （/api/ 路由）
+  → proxy_pass http://host-gateway:3100  （/monitor-api/ 路由）
+         ↓ host-gateway 解析为宿主机 IP
+宿主机 127.0.0.1:8000（cowatch-backend 生产实例）
+宿主机 127.0.0.1:3100（monitor-backend 生产实例）
+```
+
+---
+
 ## SSL 证书
 
 - 工具：Let's Encrypt + Certbot

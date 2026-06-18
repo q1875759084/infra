@@ -1,0 +1,9 @@
+services:
+  # ==================== 大盘：Nginx 托管静态文件 + 反向代理 ====================
+  # 内部运营工具，不对外绑域名，直接通过宿主机端口访问
+  # 端口映射由环境覆盖文件决定（docker-compose.prod.yml / docker-compose.dev.yml）
+  daibao:
+    image: ${DOCKER_HUB_USERNAME}/daibao-dashboard:${DAIBAO_TAG:-latest}
+    restart: always
+    extra_hosts:
+      - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP

@@ -1,0 +1,9 @@
+services:
+  daibao:
+    ports:
+      - "6000:80"  # 生产端口（内部工具，直接 IP:6000 访问）
+    environment:
+      # CoWatch-backend 生产实例
+      - COWATCH_BACKEND_URL=http://host-gateway:8000
+      # monitor-backend 生产实例
+      - MONITOR_BACKEND_URL=http://host-gateway:3100

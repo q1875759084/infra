@@ -8,6 +8,8 @@ services:
     extra_hosts:
       - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
   backend:
+    ports:
+      - "127.0.0.1:8001:3002"  # 仅本地可达，供 daibao-dashboard 临时借用；外部不可直连
     volumes:
       - cowatch-db-dev:/app/database     # 测试数据库，与生产数据完全隔离
       - cowatch-uploads-dev:/app/uploads # 测试视频文件，与生产隔离

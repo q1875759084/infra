@@ -1,0 +1,9 @@
+services:
+  daibao:
+    ports:
+      - "6001:80"  # 测试端口，与生产端口 6000 错开
+    environment:
+      # CoWatch-backend 测试实例（参考 cowatch/docker-compose.dev.yml 中的 backend expose 端口）
+      - COWATCH_BACKEND_URL=http://host-gateway:8001
+      # monitor-backend 测试实例
+      - MONITOR_BACKEND_URL=http://host-gateway:3101

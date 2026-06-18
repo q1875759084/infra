@@ -1,0 +1,84 @@
+name: daibao-dashboard 部署
+
+# ==================== 触发说明 ====================
+# 由 daibao-dashboard 仓库通过 repository_dispatch 触发
+# 事件类型：deploy-daibao-dashboard
+# payload 格式：{ "image_tag": "sha-a1b2c3d4" | "v1.0.0", "environment": "dev" | "prod" }
+#
+# 也支持手动触发（回滚 / 重启）
+
+on:
+  repository_dispatch:
+    types:
+      - deploy-daibao-dashboard
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: '镜像 tag（留空则不拉新镜像，用已有镜像重启）'
+        required: false
+        type: string
+      environment:
+        description: '部署环境'
+        required: true
+        type: choice
+        options:
+          - dev
+          - prod
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout infra 代码
+        uses: actions/checkout@v4
+
+      - name: 解析部署参数
+        id: params
+        run: |
+          if [ "${{ github.event_name }}" = "repository_dispatch" ]; then
+            echo "IMAGE_TAG=${{ github.event.client_payload.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ github.event.client_payload.environment }}" >> $GITHUB_OUTPUT
+          else
+            echo "IMAGE_TAG=${{ inputs.image_tag }}" >> $GITHUB_OUTPUT
+            echo "ENVIRONMENT=${{ inputs.environment }}" >> $GITHUB_OUTPUT
+          fi
+
+      - name: 传送 compose 文件到服务器
+        uses: appleboy/scp-action@917f8b81dfc1ccd331fef9e2d17f967dacf36262  # v0.1.7
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          source: "daibao-dashboard/docker-compose.yml,daibao-dashboard/docker-compose.${{ steps.params.outputs.ENVIRONMENT }}.yml"
+          target: "~/deploy/"
+          strip_components: 0
+
+      - name: SSH 部署容器
+        uses: appleboy/ssh-action@029f5b4aeeeb58fdfe1410a5d17f967dacf36262  # v1.0.3
+        env:
+          DOCKER_HUB_USERNAME: ${{ secrets.DOCKER_HUB_USERNAME }}
+          DAIBAO_TAG: ${{ steps.params.outputs.IMAGE_TAG }}
+          ENVIRONMENT: ${{ steps.params.outputs.ENVIRONMENT }}
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: DOCKER_HUB_USERNAME,DAIBAO_TAG,ENVIRONMENT
+          script_stop: true
+          script: |
+            cd ~/deploy/daibao-dashboard
+
+            if [ -n "$DAIBAO_TAG" ]; then
+              docker pull docker.io/$DOCKER_HUB_USERNAME/daibao-dashboard:$DAIBAO_TAG
+            else
+              DAIBAO_TAG=$(docker inspect --format='{{index .RepoTags 0}}' $(docker ps -q --filter name=daibao-dashboard-daibao) 2>/dev/null | awk -F: '{print $2}')
+              DAIBAO_TAG=${DAIBAO_TAG:-$(docker images --format '{{.Tag}}' $DOCKER_HUB_USERNAME/daibao-dashboard | head -1)}
+            fi
+
+            DOCKER_HUB_USERNAME=$DOCKER_HUB_USERNAME \
+            DAIBAO_TAG=$DAIBAO_TAG \
+              docker compose \
+                -f docker-compose.yml \
+                -f docker-compose.$ENVIRONMENT.yml \
+                up -d daibao
