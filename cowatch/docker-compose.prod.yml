@@ -9,7 +9,7 @@ services:
       - "host-gateway:host-gateway"  # Linux 下将 host-gateway 解析为宿主机 IP
   backend:
     ports:
-      - "127.0.0.1:8000:3002"  # 仅本地可达，供 daibao-dashboard 临时借用；外部不可直连
+      - "8000:3002"  # 供 daibao-dashboard 容器经 host-gateway 访问；宿主机安全组未开放此端口，外网不可直连
     volumes:
       - cowatch-db-prod:/app/database     # SQLite 数据库持久化
       - cowatch-uploads-prod:/app/uploads # 本地模式视频文件持久化（COS 模式下无写入）
