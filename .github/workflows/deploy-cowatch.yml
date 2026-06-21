@@ -163,6 +163,12 @@ jobs:
           script: |
             cd ~/deploy/cowatch
 
+            # 前置校验：COS 核心变量必须有值，防止偶发 Secrets 注入失败导致容器以本地模式启动
+            if [ -z "$COS_REGION" ] || [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ] || [ -z "$COS_BUCKET" ]; then
+              echo "❌ COS 环境变量为空（COS_REGION/COS_SECRET_ID/COS_SECRET_KEY/COS_BUCKET），部署中止"
+              exit 1
+            fi
+
             if [ -n "$BACKEND_TAG" ]; then
               docker pull docker.io/$DOCKER_HUB_USERNAME/cowatch-backend:$BACKEND_TAG
             else
