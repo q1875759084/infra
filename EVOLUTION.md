@@ -952,3 +952,46 @@ systemctl restart docker
 | 单点故障 | 加速器宕机时所有 pull 请求失败 |
 
 **判断标准**：加速器只应用于拉取官方基础镜像（构建阶段），不应依赖其代理自有镜像。若需加速自有镜像的分发，应使用私有 Registry（如 Harbor）或 CDN 加速，而非依赖第三方白名单代理。
+
+---
+
+## 故障记录：GitHub Actions Secrets 注入失败导致后端以本地模式运行（2026-06）
+
+### 现象
+
+后端服务正常启动，但上传视频后：
+- HLS 切片的 `.m3u8` 生成失败，报 `ENOENT: no such file or directory`，路径为本地 `/app/uploads/...`
+- 用户头像等静态资源通过 CDN 访问时返回 403
+
+### 根因
+
+`deploy-cowatch.yml` 的后端部署 step 通过 `appleboy/ssh-action` 的 `envs` 字段将 GitHub Secrets 注入到 SSH 会话。本次部署时 `COS_REGION`、`COS_SECRET_ID`、`COS_SECRET_KEY`、`COS_BUCKET` 等变量在 runner 侧已注入，但 SSH 会话未能正确继承（注入失败的具体原因未完全确认，可能与 `appleboy/ssh-action` 版本行为或 runner 瞬态故障有关），导致这些变量在容器内为空字符串。
+
+后端 `isOnlineMode()` 判断逻辑依赖这些变量是否有值，全部为空时回落到"本地模式"：
+- COS 上传被跳过，切片写入本地 `/app/uploads/`
+- `generateM3u8` 尝试读取本地路径的切片文件，因文件不存在抛 `ENOENT`
+- 静态资源 URL 使用 COS 默认路径而非 CDN 域名，CDN 鉴权失败返回 403
+
+### 修复
+
+通过 `workflow_dispatch` 手动重新触发后端部署（Secrets 重新注入），容器恢复正常模式。
+
+### 预防措施
+
+在 `deploy-cowatch.yml` 的 SSH 部署脚本开头加前置校验，若关键 COS 变量为空则立即 `exit 1`，阻止以错误配置启动容器：
+
+```yaml
+# 前置校验：COS 核心变量必须有值，防止偶发 Secrets 注入失败导致容器以本地模式启动
+if [ -z "$COS_REGION" ] || [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ] || [ -z "$COS_BUCKET" ]; then
+  echo "❌ COS 环境变量为空（COS_REGION/COS_SECRET_ID/COS_SECRET_KEY/COS_BUCKET），部署中止"
+  exit 1
+fi
+```
+
+### 经验
+
+| 问题 | 说明 |
+|---|---|
+| Secrets 注入不是 100% 可靠 | `appleboy/ssh-action` 的 `envs` 字段依赖 runner → SSH 通道传递，极少数情况下可能静默失败 |
+| 回落逻辑是双刃剑 | "变量为空 → 本地模式"的回落设计方便本地开发，但在生产环境意味着配置错误会被静默吞掉，服务看似正常实则功能异常 |
+| fail-fast 优于静默降级 | 生产环境关键配置缺失时应直接报错终止，而非降级运行，暴露问题比隐藏问题更安全 |
