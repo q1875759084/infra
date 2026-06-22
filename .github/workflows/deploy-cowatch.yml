@@ -199,3 +199,6 @@ jobs:
                 -f docker-compose.yml \
                 -f docker-compose.$ENVIRONMENT.yml \
                 up -d backend
+
+            # backend 重建后 IP 变了，nginx 缓存了旧 IP → 502，重启让 nginx 重新解析 DNS
+            docker compose -f docker-compose.yml -f docker-compose.$ENVIRONMENT.yml restart frontend
