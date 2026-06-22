@@ -11,9 +11,11 @@ services:
     ports:
       - "8001:3002"  # 供 daibao-dashboard 容器经 host-gateway 访问；宿主机安全组未开放此端口，外网不可直连
     volumes:
-      - cowatch-db-dev:/app/database     # 测试数据库，与生产数据完全隔离
-      - cowatch-uploads-dev:/app/uploads # 测试视频文件，与生产隔离
+      - cowatch-uploads-dev:/app/uploads  # 测试视频文件，与生产隔离
+  postgres:
+    volumes:
+      - cowatch-pgdata-dev:/var/lib/postgresql/data  # 测试数据库独立持久化
 
 volumes:
-  cowatch-db-dev:
   cowatch-uploads-dev:
+  cowatch-pgdata-dev:

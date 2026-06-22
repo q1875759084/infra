@@ -152,13 +152,14 @@ jobs:
           CDN_AUTH_KEY: ${{ secrets.CDN_AUTH_KEY }}
           COS_STATIC_BUCKET: ${{ secrets.COS_STATIC_BUCKET }}
           COS_STATIC_URL: ${{ secrets.COS_STATIC_URL }}
+          PG_PASSWORD: ${{ secrets.PG_PASSWORD }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
           # 加密通道传入：Secret 经 runner 环境变量 → SSH 会话环境变量 → compose 读取
           # 值不出现在命令行（ps aux / shell history 不可见）
-          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,COS_REGION,COS_BUCKET,COS_SECRET_ID,COS_SECRET_KEY,COS_BASE_URL,CDN_AUTH_KEY,COS_STATIC_BUCKET,COS_STATIC_URL
+          envs: DOCKER_HUB_USERNAME,BACKEND_TAG,ENVIRONMENT,CORS_ORIGIN,JWT_SECRET,COS_REGION,COS_BUCKET,COS_SECRET_ID,COS_SECRET_KEY,COS_BASE_URL,CDN_AUTH_KEY,COS_STATIC_BUCKET,COS_STATIC_URL,PG_PASSWORD
           script_stop: true
           script: |
             cd ~/deploy/cowatch
@@ -166,6 +167,10 @@ jobs:
             # 前置校验：COS 核心变量必须有值，防止偶发 Secrets 注入失败导致容器以本地模式启动
             if [ -z "$COS_REGION" ] || [ -z "$COS_SECRET_ID" ] || [ -z "$COS_SECRET_KEY" ] || [ -z "$COS_BUCKET" ]; then
               echo "❌ COS 环境变量为空（COS_REGION/COS_SECRET_ID/COS_SECRET_KEY/COS_BUCKET），部署中止"
+              exit 1
+            fi
+            if [ -z "$PG_PASSWORD" ]; then
+              echo "❌ PG_PASSWORD 为空，部署中止"
               exit 1
             fi
 
@@ -189,6 +194,7 @@ jobs:
             CDN_AUTH_KEY=$CDN_AUTH_KEY \
             COS_STATIC_BUCKET=$COS_STATIC_BUCKET \
             COS_STATIC_URL=$COS_STATIC_URL \
+            PG_PASSWORD=$PG_PASSWORD \
               docker compose \
                 -f docker-compose.yml \
                 -f docker-compose.$ENVIRONMENT.yml \

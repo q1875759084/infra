@@ -20,6 +20,8 @@ services:
       - CORS_ORIGIN=${CORS_ORIGIN}
       - JWT_SECRET=${JWT_SECRET}
       - NODE_ENV=production
+      # PostgreSQL 连接字符串，由各环境覆盖文件中的 PG_PASSWORD 等变量拼接
+      - DATABASE_URL=postgresql://${PG_USER:-cowatch}:${PG_PASSWORD}@postgres:5432/${PG_DB:-cowatch}
       # COS 配置（留空则自动降级为本地 uploads/ 文件存储模式）
       - COS_REGION=${COS_REGION:-}
       - COS_BUCKET=${COS_BUCKET:-}
@@ -32,7 +34,9 @@ services:
       # static 桶配置（public read，用于头像存储；与视频桶共用 SecretId/SecretKey 和 Region）
       - COS_STATIC_BUCKET=${COS_STATIC_BUCKET:-}
       - COS_STATIC_URL=${COS_STATIC_URL:-}
-    # volumes 由环境覆盖文件声明，生产和测试数据完全隔离
+    depends_on:
+      postgres:
+        condition: service_healthy
     restart: always
     deploy:
       resources:
@@ -44,3 +48,19 @@ services:
         reservations:
           cpus: '0.5'
           memory: 128M
+
+  # ==================== PostgreSQL 数据库 ====================
+  # 内部服务，不对外暴露端口
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=${PG_USER:-cowatch}
+      - POSTGRES_PASSWORD=${PG_PASSWORD}
+      - POSTGRES_DB=${PG_DB:-cowatch}
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${PG_USER:-cowatch} -d ${PG_DB:-cowatch}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: always
+    # volumes 由各环境覆盖文件声明

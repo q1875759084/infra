@@ -11,9 +11,11 @@ services:
     ports:
       - "8000:3002"  # 供 daibao-dashboard 容器经 host-gateway 访问；宿主机安全组未开放此端口，外网不可直连
     volumes:
-      - cowatch-db-prod:/app/database     # SQLite 数据库持久化
-      - cowatch-uploads-prod:/app/uploads # 本地模式视频文件持久化（COS 模式下无写入）
+      - cowatch-uploads-prod:/app/uploads  # 本地模式视频文件持久化（COS 模式下无写入）
+  postgres:
+    volumes:
+      - cowatch-pgdata-prod:/var/lib/postgresql/data  # 生产数据库持久化
 
 volumes:
-  cowatch-db-prod:
   cowatch-uploads-prod:
+  cowatch-pgdata-prod:
