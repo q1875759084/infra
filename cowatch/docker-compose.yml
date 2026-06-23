@@ -41,13 +41,13 @@ services:
     deploy:
       resources:
         limits:
-          # 服务器 2 核，保留 0.5 核给宿主机 + 其他服务
-          cpus: '1.5'
-          # WebSocket 长连接 + 视频上传缓冲内存上限
-          memory: 512M
+          # 服务器 4 核，保留 1 核给宿主机 + 其他服务，ffmpeg 转码可用 3 核
+          cpus: '3.0'
+          # WebSocket 长连接 + 视频上传 + ffmpeg 转码缓冲内存上限
+          memory: 1536M
         reservations:
           cpus: '0.5'
-          memory: 128M
+          memory: 256M
 
   # ==================== PostgreSQL 数据库 ====================
   # 内部服务，不对外暴露端口
